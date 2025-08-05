@@ -1,0 +1,62 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2822
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 \
+import pymc as pm\
+import aesara.tensor as at\
+import numpy as np\
+\
+# Assume returns is a (T, 2) numpy array\
+returns = ...  \
+T, N = returns.shape\
+\
+with pm.Model() as dcc_garch_model:\
+\
+    # Univariate GARCH params\
+    omega = pm.Exponential("omega", 1.0, shape=N)\
+    alpha = pm.Beta("alpha", 2, 5, shape=N)\
+    beta = pm.Beta("beta", 2, 5, shape=N)\
+\
+    # DCC parameters\
+    a = pm.Beta("a", 2, 5)\
+    b = pm.Beta("b", 2, 5)\
+\
+    # Initial variance\
+    h0 = pm.Exponential("h0", 1.0, shape=N)\
+\
+    # Initial residuals\
+    eps0 = pm.Normal("eps0", mu=0, sigma=1, shape=N)\
+\
+    # Unconditional correlation matrix\
+    Q_bar = np.corrcoef(returns.T)\
+    Q0 = Q_bar\
+\
+    def step(t, h_tm1, Q_tm1, eps_tm1):\
+        h_t = omega + alpha * eps_tm1**2 + beta * h_tm1\
+        D_t = at.sqrt(h_t)\
+\
+        eps_t = returns[t] / D_t\
+\
+        outer = at.outer(eps_tm1, eps_tm1)\
+        Q_t = (1 - a - b) * Q_bar + a * outer + b * Q_tm1\
+\
+        # Normalize to get correlation matrix\
+        stddevs = at.sqrt(at.diag(Q_t))\
+        R_t = Q_t / at.outer(stddevs, stddevs)\
+\
+        H_t = at.outer(D_t, D_t) * R_t\
+        return h_t, Q_t, eps_t, H_t\
+\
+    (_, _, _, H_seq), _ = aesara.scan(\
+        fn=step,\
+        sequences=at.arange(1, T),\
+        outputs_info=[h0, Q0, eps0, None]\
+    )\
+\
+    # Likelihood: assume multivariate normal\
+    pm.MvNormal("obs", mu=at.zeros(N), cov=H_seq, observed=returns[1:])\
+}

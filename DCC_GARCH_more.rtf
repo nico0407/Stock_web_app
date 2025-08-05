@@ -1,0 +1,64 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2822
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 import pymc as pm\
+import aesara.tensor as at\
+import numpy as np\
+from aesara.tensor import constant\
+\
+# returns: shape (T, N)\
+returns = ...  \
+T, N = returns.shape\
+\
+with pm.Model() as dcc_garch_model:\
+\
+    # Univariate GARCH(1,1) parameters for each asset\
+    omega = pm.Exponential("omega", 1.0, shape=N)\
+    alpha = pm.Beta("alpha", 2, 5, shape=N)\
+    beta = pm.Beta("beta", 2, 5, shape=N)\
+\
+    # DCC parameters (scalar)\
+    a = pm.Beta("a", 2, 5)\
+    b = pm.Beta("b", 2, 5)\
+\
+    # Initial variance and residuals\
+    h0 = pm.Exponential("h0", 1.0, shape=N)\
+    eps0 = pm.Normal("eps0", mu=0, sigma=1, shape=N)\
+\
+    # Unconditional correlation matrix \uc0\u81 \u772 \
+    Q_bar = constant(np.corrcoef(returns.T))\
+    Q0 = Q_bar\
+\
+    # Recurrence\
+    def step(t, h_tm1, Q_tm1, eps_tm1):\
+        h_t = omega + alpha * eps_tm1**2 + beta * h_tm1\
+        D_t = at.sqrt(h_t)\
+\
+        eps_t = returns[t] / D_t  # Standardized residuals\
+\
+        outer = at.outer(eps_tm1, eps_tm1)\
+        Q_t = (1 - a - b) * Q_bar + a * outer + b * Q_tm1\
+\
+        # Normalize Q_t to get R_t\
+        D_inv = at.nlinalg.diag(1.0 / at.sqrt(at.diag(Q_t)))\
+        R_t = D_inv @ Q_t @ D_inv\
+\
+        # Full conditional covariance H_t = D_t * R_t * D_t\
+        H_t = at.outer(D_t, D_t) * R_t\
+\
+        return h_t, Q_t, eps_t, H_t\
+\
+    # Run time recursion\
+    (_, _, _, H_seq), _ = aesara.scan(\
+        fn=step,\
+        sequences=at.arange(1, T),\
+        outputs_info=[h0, Q0, eps0, None]\
+    )\
+\
+    # Multivariate normal likelihood\
+    pm.MvNormal("obs", mu=at.zeros(N), cov=H_seq, observed=returns[1:])\
+}
